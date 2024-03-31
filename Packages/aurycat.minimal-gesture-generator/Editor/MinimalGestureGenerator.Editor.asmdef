@@ -1,0 +1,24 @@
+{
+    "name": "MinimalGestureGenerator.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:d689052aa981bf8459346a530f6e6678",
+        "GUID:991aa13436cab7042b8f99eec24db7eb",
+        "GUID:71d9dcc7d30ab1c45866d01afa59b6cf",
+        "GUID:356d14c4abd8bff41a19e9fbb31ccb86"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VRCSDKBase.dll",
+        "VRCSDK3A.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

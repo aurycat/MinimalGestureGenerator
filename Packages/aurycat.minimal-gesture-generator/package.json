@@ -1,0 +1,19 @@
+{
+  "name": "aurycat.minimal-gesture-generator",
+  "displayName": "MinimalGestureGenerator",
+  "version": "1.0.0",
+  "unity": "2022.3",
+  "description": "A tool to automate generating an animator controller layer for an avatar's expressions & gestures.",
+  "vrchatVersion": "2022.1.1",
+  "license": "MIT",
+  "author": {
+    "name": "aurycat",
+    "url": "https://github.com/aurycat/MinimalGestureGenerator"
+  },
+  "vpmDependencies": {
+    "dev.hai-vr.animator-as-code.v1": "~1.0.9930",
+    "dev.hai-vr.animator-as-code.v1.vrchat": "1.0.x",
+    "dev.hai-vr.animator-as-code.v1.vrchat-destructive-workflow": "1.0.x",
+    "com.vrchat.avatars": "^3.3.0"
+  }
+}
