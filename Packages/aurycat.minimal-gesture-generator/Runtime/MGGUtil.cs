@@ -29,6 +29,8 @@ static public class MGGUtil
         Asymmetric,
         Symmetric,
         SymmetricWithDoubles,
+        LeftOnly,
+        RightOnly,
     }
 
     public const int NumStandardGestures = 8; // Including Neutral
@@ -46,6 +48,7 @@ static public class MGGUtil
     // Asymmetric Combo Gestures
     // Includes every permutation of left- and right-hand gestures
     // (e.g. LFist+RPoint is different from LPoint+RFist)
+    // The array is left-major order, i.e. L0R0, L0R1, L0R2, ..., L1R0, L1R1, L1R2, ..., L7R6, L7R7
     // This is the largest set of gestures possible, so is also the
     // length of the Motion[] array used to store gesture animations.
     public const int NumAsymmetricComboGestures = NumStandardGestures * NumStandardGestures; // 64
@@ -74,6 +77,14 @@ static public class MGGUtil
     //static public readonly int[] AsymmetricToSymmetricDoublesMap = new int[NumAsymmetricComboGestures];
     static public readonly int[] DoubleSymAsymMap2 = new int[NumAsymmetricComboGestures];
     static public readonly StandardGestureFlag[] SymmetricDoublesComboGestureUses = new StandardGestureFlag[NumSymmetricDoublesComboGestures];
+
+    // One Hand Only
+    static public readonly string[] LeftHandOnlyGestureNames = new string[NumStandardGestures];
+    static public readonly string[] RightHandOnlyGestureNames = new string[NumStandardGestures];
+    static public readonly int[] OneHandOnlyToAsymmetricMap = new int[NumStandardGestures];
+    static public readonly int[] LeftHandOnlyAsymMap2 = new int[NumAsymmetricComboGestures];
+    static public readonly int[] RightHandOnlyAsymMap2 = new int[NumAsymmetricComboGestures];
+    static public readonly StandardGestureFlag[] OneHandOnlyGestureUses = new StandardGestureFlag[NumStandardGestures];
 
     static MGGUtil() {
         // Init Asymmetric
@@ -129,6 +140,18 @@ static public class MGGUtil
                 c++;
             }
         }
+
+        // One Hand Only
+        for (int i = 0; i < NumStandardGestures; i++) {
+            LeftHandOnlyGestureNames[i] = $"Left {StandardGestureNames[i]}";
+            RightHandOnlyGestureNames[i] = $"Right {StandardGestureNames[i]}";
+            OneHandOnlyToAsymmetricMap[i] = i;
+            OneHandOnlyGestureUses[i] = (StandardGestureFlag)(1 << i);
+            for (int j = 0; j < NumStandardGestures; j++) {
+                LeftHandOnlyAsymMap2[i*NumStandardGestures + j] = i;
+                RightHandOnlyAsymMap2[i*NumStandardGestures + j] = j;
+            }
+        }
     }
 
     static public bool GestureIsEnabled(StandardGestureFlag uses, StandardGestureFlag enabledMask)
@@ -148,28 +171,31 @@ static public class MGGUtil
             throw new Exception($"Invalid length for combo gesture array {arr.Length}");
         }
 
-        if (mode == ComboGestureMode.Asymmetric) {
+        int[] map = null;
+
+        switch(mode) {
+        case ComboGestureMode.Asymmetric:
             return((T[])arr.Clone());
-        }
-
-        T[] newarr = new T[NumAsymmetricComboGestures];
-
-        if (mode == ComboGestureMode.Symmetric) {
-            newarr = new T[NumAsymmetricComboGestures];
-            for (int i = 0; i < NumAsymmetricComboGestures; i++) {
-                newarr[i] = arr[SymAsymMap2[i]];
-            }
-        }
-        else if (mode == ComboGestureMode.SymmetricWithDoubles) {
-            newarr = new T[NumAsymmetricComboGestures];
-            for (int i = 0; i < NumAsymmetricComboGestures; i++) {
-                newarr[i] = arr[DoubleSymAsymMap2[i]];
-            }
-        }
-        else {
+        case ComboGestureMode.Symmetric:
+            map = SymAsymMap2;
+            break;
+        case ComboGestureMode.SymmetricWithDoubles:
+            map = DoubleSymAsymMap2;
+            break;
+        case ComboGestureMode.LeftOnly:
+            map = LeftHandOnlyAsymMap2;
+            break;
+        case ComboGestureMode.RightOnly:
+            map = RightHandOnlyAsymMap2;
+            break;
+        default:
             throw new Exception($"Invalid ComboGestureMode {mode}");
         }
 
+        T[] newarr = new T[NumAsymmetricComboGestures];
+        for (int i = 0; i < NumAsymmetricComboGestures; i++) {
+            newarr[i] = arr[map[i]];
+        }
         return newarr;
     }
 }

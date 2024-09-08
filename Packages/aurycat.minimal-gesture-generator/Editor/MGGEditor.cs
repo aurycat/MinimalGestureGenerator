@@ -14,7 +14,9 @@ public class MGGEditor : Editor
 {
     SerializedProperty avatarRootProp;
     SerializedProperty fxControllerProp;
+    SerializedProperty layerNameProp;
     SerializedProperty assetContainerProp;
+    SerializedProperty assetKeyNameProp;
     SerializedProperty comboGestureModeProp;
     SerializedProperty enabledGesturesProp;
     SerializedProperty handGesturesProp;
@@ -22,6 +24,7 @@ public class MGGEditor : Editor
     SerializedProperty manualOverrideExpressionsProp;
     SerializedProperty eyesClosedMotionsProp;
     SerializedProperty transitionDurationProp;
+    SerializedProperty transitionInterruptionProp;
     SerializedProperty useWriteDefaultsProp;
     SerializedProperty maskProp;
     SerializedProperty useContactExpressionsProp;
@@ -62,7 +65,9 @@ public class MGGEditor : Editor
         serializedObject.maxArraySizeForMultiEditing = MGGUtil.NumAsymmetricComboGestures;
         avatarRootProp = serializedObject.FindProperty("AvatarRoot");
         fxControllerProp = serializedObject.FindProperty("FXController");
+        layerNameProp = serializedObject.FindProperty("LayerName");
         assetContainerProp = serializedObject.FindProperty("AssetContainer");
+        assetKeyNameProp = serializedObject.FindProperty("AssetKeyName");
         comboGestureModeProp = serializedObject.FindProperty("ComboGestureMode");
         enabledGesturesProp = serializedObject.FindProperty("EnabledGestures");
         handGesturesProp = serializedObject.FindProperty("HandGestureExpressions");
@@ -70,6 +75,7 @@ public class MGGEditor : Editor
         manualOverrideExpressionsProp = serializedObject.FindProperty("ManualOverrideExpressions");
         eyesClosedMotionsProp = serializedObject.FindProperty("EyesClosedMotions");
         transitionDurationProp = serializedObject.FindProperty("TransitionDuration");
+        transitionInterruptionProp = serializedObject.FindProperty("TransitionInterruption");
         useWriteDefaultsProp = serializedObject.FindProperty("UseWriteDefaults");
         maskProp = serializedObject.FindProperty("Mask");
         useContactExpressionsProp = serializedObject.FindProperty("UseContactExpressions");
@@ -203,7 +209,9 @@ public class MGGEditor : Editor
             }
 
             if (!disableGenerate && noExpressions) {
-                EditorGUILayout.HelpBox("No hand gestures, contact expressions, or override expressions are set. An empty animator will be generated.", MessageType.Warning);
+                EditorGUILayout.HelpBox(
+"No hand gestures, contact expressions, or override expressions are set. " +
+"An empty animator will be generated.", MessageType.Warning);
             }
         }
 
@@ -216,19 +224,71 @@ public class MGGEditor : Editor
 
             EditorGUILayout.PropertyField(avatarRootProp);
             if (noAvatarRoot) {
-                EditorGUILayout.HelpBox("No Avatar Root is set. This should be the top-level GameObject of your avatar -- where the VRCAvatarDescriptor is.", MessageType.Error);
+                EditorGUILayout.HelpBox(
+"No Avatar Root is set. This should be the top-level GameObject of your avatar " +
+"-- where the VRCAvatarDescriptor is.", MessageType.Error);
             }
 
             EditorGUILayout.Space(5);
-            EditorGUILayout.PropertyField(fxControllerProp);
+            EditorGUILayout.PropertyField(fxControllerProp,
+                new GUIContent("FX Controller",
+"Animator Controller to generate into. It's called \"FX Controller\", because " +
+"most commonly you should use the FX Playable Layer of your avatar. However, " +
+"this can be any arbitrary Animator Controller."));
             if (noFXController) {
-                EditorGUILayout.HelpBox("No FX Controller is set. This should usually be set to the FX Playable Layer controller of your avatar, but it can be any Animator Controller.", MessageType.Error);
+                EditorGUILayout.HelpBox(
+"No FX Controller is set. This should usually be set to the FX Playable Layer " +
+"controller of your avatar, but it can be any Animator Controller.", MessageType.Error);
+            }
+
+            EditorGUILayout.Space(5);
+            Rect layerNameRect = EditorGUILayout.GetControlRect();
+            EditorGUI.PropertyField(layerNameRect, layerNameProp,
+                new GUIContent("FX Layer Name",
+"Name to use for the generated animator layer. \"Left\" or \"Right\" get " +
+"automatically appended when using Left Only or Right Only modes."));
+
+            // Placeholder text
+            if (!layerNameProp.hasMultipleDifferentValues && String.IsNullOrEmpty(layerNameProp.stringValue)) {
+                GUIStyle placeholderTextStyle = new GUIStyle(GUI.skin.label);
+                placeholderTextStyle.fontStyle = FontStyle.Italic;
+                using (new EditorGUI.DisabledScope(true)) {
+                    layerNameRect.xMin += 1;
+                    EditorGUI.TextField(layerNameRect, " ", MinimalGestureGenerator.DefaultLayerName, placeholderTextStyle);
+                }
             }
 
             EditorGUILayout.Space(5);
             EditorGUILayout.PropertyField(assetContainerProp);
             if (noAssetContainer) {
-                EditorGUILayout.HelpBox("Leave this blank to automatically create an asset container the first time you press Generate Gestures.", MessageType.Info);
+                EditorGUILayout.HelpBox(
+"Leave this blank to automatically create an asset container the " +
+"first time you press Generate Gestures.", MessageType.Info);
+            }
+
+            EditorGUILayout.Space(5);
+            Rect assetKeyNameRect = EditorGUILayout.GetControlRect();
+            EditorGUI.PropertyField(assetKeyNameRect, assetKeyNameProp,
+                new GUIContent("Asset Key Name",
+"Avatar name used when creating asset files in the asset container. " +
+"When you click 'Generate Animator Layer', any existing assets with this " +
+"key name are erased to make room for newly generated ones. Leave this " +
+"field blank to automatically use the name of the Avatar Root GameObject."));
+
+            // Placeholder text
+            if (!assetKeyNameProp.hasMultipleDifferentValues && String.IsNullOrEmpty(assetKeyNameProp.stringValue)) {
+                GUIStyle placeholderTextStyle = new GUIStyle(GUI.skin.label);
+                placeholderTextStyle.fontStyle = FontStyle.Italic;
+
+                string placeholderText = "—";
+                if (avatarRoot != null) {
+                    placeholderText = avatarRoot.gameObject.name;
+                }
+
+                using (new EditorGUI.DisabledScope(true)) {
+                    assetKeyNameRect.xMin += 1;
+                    EditorGUI.TextField(assetKeyNameRect, " ", placeholderText, placeholderTextStyle);
+                }
             }
 
             EditorGUI.indentLevel--;
@@ -249,6 +309,14 @@ public class MGGEditor : Editor
             EditorGUILayout.PropertyField(comboGestureModeProp);
             if (comboGestureModeProp.hasMultipleDifferentValues) {
                 EditorGUILayout.HelpBox("Selected objects have different Combo Gesture Modes. Showing all gestures.", MessageType.Warning);
+            }
+            else if (comboMode == MGGUtil.ComboGestureMode.LeftOnly ||
+                     comboMode == MGGUtil.ComboGestureMode.RightOnly) {
+                EditorGUILayout.HelpBox(
+"Tip: You can use two MGG objects for your avatar, one set to Left Only and the " +
+"other set to Right Only. This allows you to have completely independent gestures " +
+"for each hand -- for example, one hand controls the mouth and the other hand " +
+"controls the eyes.", MessageType.Info);
             }
 
             EditorGUILayout.Space(5);
@@ -316,6 +384,20 @@ public class MGGEditor : Editor
                             int motionArrayIndex = MGGUtil.SymmetricDoublesToAsymmetricMap[i];
                             SerializedProperty elemProp = handGesturesProp.GetArrayElementAtIndex(motionArrayIndex);
                             EditorGUILayout.PropertyField(elemProp, new GUIContent(MGGUtil.SymmetricDoublesComboGestureNames[i]));
+                        }
+                    }
+                    else if (comboMode == MGGUtil.ComboGestureMode.LeftOnly ||
+                             comboMode == MGGUtil.ComboGestureMode.RightOnly) {
+                        for (int i = 0; i < MGGUtil.NumStandardGestures; i++) {
+                            if (i == 0) { continue; } // Skip neutral
+                            if (!MGGUtil.GestureIsEnabled(MGGUtil.OneHandOnlyGestureUses[i], enabledGesturesMask)) {
+                                continue;
+                            }
+                            int motionArrayIndex = MGGUtil.OneHandOnlyToAsymmetricMap[i];
+                            SerializedProperty elemProp = handGesturesProp.GetArrayElementAtIndex(motionArrayIndex);
+                            EditorGUILayout.PropertyField(elemProp, new GUIContent(
+                                comboMode == MGGUtil.ComboGestureMode.LeftOnly ?
+                                    MGGUtil.LeftHandOnlyGestureNames[i] : MGGUtil.RightHandOnlyGestureNames[i]));
                         }
                     }
 
@@ -461,6 +543,15 @@ $"Manual Expressions use a single shared integer property with the name given " 
                 new GUIContent("Transition Duration (seconds)",
 "How fast to blend between expressions, e.g. when you change your hand gesture. " +
 " 0 will make the transition instant (will look unnatural!)"));
+
+            EditorGUILayout.Space(2);
+            EditorGUILayout.PropertyField(transitionInterruptionProp,
+                new GUIContent("Transition Interruption",
+"When enabled, allows gesture state transitions to be interrupted by other " +
+"transitions. If set, switching between gestures is faster, but can look " +
+"choppy if you transition between them too often. If unset, switching between " +
+"gestures can sometimes feel too slow, especially if you have trouble getting " +
+"the finger positions correct on Index controllers."));
 
             EditorGUILayout.Space(2);
             EditorGUILayout.PropertyField(maskProp,
@@ -725,9 +816,9 @@ $"Manual Expressions use a single shared integer property with the name given " 
         contactGesturesList = new CustomLayoutArrayFoldout(serializedObject, contactExpressionsProp);
         contactGesturesList.list.headerHeight = 0;
         contactGesturesList.list.elementHeight = EditorGUIUtility.singleLineHeight;
-        contactGesturesList.list.drawElementCallback =  
+        contactGesturesList.list.drawElementCallback =
         (Rect rect, int index, bool isActive, bool isFocused) => {
-            
+
             if (contactExpressionsProp == null ||
                 contactExpressionsProp.arraySize <= index)
             {
@@ -804,9 +895,9 @@ $"Manual Expressions use a single shared integer property with the name given " 
         manualOverrideGesturesList = new CustomLayoutArrayFoldout(serializedObject, manualOverrideExpressionsProp);
         manualOverrideGesturesList.list.headerHeight = 0;
         manualOverrideGesturesList.list.elementHeight = EditorGUIUtility.singleLineHeight;
-        manualOverrideGesturesList.list.drawElementCallback =  
+        manualOverrideGesturesList.list.drawElementCallback =
         (Rect rect, int index, bool isActive, bool isFocused) => {
-            
+
             if (manualOverrideExpressionsProp == null ||
                 manualOverrideExpressionsProp.arraySize <= index)
             {
@@ -832,7 +923,7 @@ $"Manual Expressions use a single shared integer property with the name given " 
         eyesClosedMotionsList = new CustomLayoutArrayFoldout(serializedObject, eyesClosedMotionsProp);
         eyesClosedMotionsList.list.headerHeight = 0;
         eyesClosedMotionsList.list.elementHeight = EditorGUIUtility.singleLineHeight;
-        eyesClosedMotionsList.list.drawElementCallback =  
+        eyesClosedMotionsList.list.drawElementCallback =
         (Rect rect, int index, bool isActive, bool isFocused) => {
 
             if (eyesClosedMotionsProp == null ||
@@ -876,7 +967,7 @@ $"Manual Expressions use a single shared integer property with the name given " 
         else {
             content.tooltip = "[Currently OFF] " + tooltipSave;
             // Fadeout icon when disabled
-            tint.a = 0.2f; 
+            tint.a = 0.2f;
         }
         GUI.color = tint;
 

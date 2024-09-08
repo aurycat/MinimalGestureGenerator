@@ -176,9 +176,23 @@ $"One or more of the animations{multiText} animates properties that are not " +
         // Setup animator controller output using AnimatorAsCode
         //
 
+        string assetKeyName = String.IsNullOrEmpty(target.AssetKeyName)
+            ? target.AvatarRoot.gameObject.name : target.AssetKeyName;
+        string layerName = String.IsNullOrEmpty(target.LayerName)
+            ? MinimalGestureGenerator.DefaultLayerName : target.LayerName;
+
+        if (target.ComboGestureMode == MGGUtil.ComboGestureMode.LeftOnly) {
+            assetKeyName += "_L";
+            layerName += " Left";
+        }
+        else if (target.ComboGestureMode == MGGUtil.ComboGestureMode.RightOnly) {
+            assetKeyName += "_R";
+            layerName += " Right";
+        }
+
         AacConfiguration config = new AacConfiguration {
-            SystemName = "MGG",
-            AssetKey = target.AvatarRoot.gameObject.name,
+            SystemName = layerName,
+            AssetKey = assetKeyName,
             AnimatorRoot = target.AvatarRoot.transform,
             DefaultValueRoot = target.AvatarRoot.transform,
             AssetContainer = target.AssetContainer,
@@ -200,18 +214,17 @@ $"One or more of the animations{multiText} animates properties that are not " +
         //
 
         // Find existing layer MGG anim layer, if present
-        string fullLayerName = config.DefaultsProvider.ConvertLayerNameWithSuffix(config.SystemName, GeneratedLayerName);
         AnimatorControllerLayer existingLayer =
-            target.FXController.layers.FirstOrDefault(l => l.name == fullLayerName);
+            target.FXController.layers.FirstOrDefault(l => l.name == layerName);
 
-        // CreateSupportingArbitraryControllerLayer already clears the layer,
+        // CreateMainArbitraryControllerLayer already clears the layer,
         // but MGGAnimatorUtils.ClearLayer can do it MUCH faster, and without
         // leaking subassets. See ClearLayer's header comment for more info.
         if (existingLayer != null) {
             MGGAnimatorUtils.ClearLayer(target.FXController, existingLayer);
         }
 
-        AacFlLayer fx = aac.CreateSupportingArbitraryControllerLayer(target.FXController, GeneratedLayerName);
+        AacFlLayer fx = aac.CreateMainArbitraryControllerLayer(target.FXController);
 
         if (target.Mask != null) {
             fx.WithAvatarMask(target.Mask);
@@ -230,7 +243,12 @@ $"One or more of the animations{multiText} animates properties that are not " +
                                // If all hand gesture motions are null/neutral, no need to generate
                                // the state machine. Same as if user set no enabled gestures at all.
                                handGestureMotionsAllBindings.Any(m => m != null && m != handGestureMotionsAllBindings[0]);
-        bool useManualOverrides = anyClips && manualOverrideMotionsAllBindings.Length > 0;
+        // An empty motion for manual overrides acts like neutral.
+        // So if there is at least one motion slot, even if it's empty,
+        // still generate the override states.
+        bool useManualOverrides = anyClips &&
+                                  target.UseManualOverrideExpressions &&
+                                  target.ManualOverrideExpressions.Length > 0;
         bool useContactExpressionsHP = anyClips && contactMotionsHPAllBindings.Length > 0;
         bool useContactExpressionsLP = anyClips && contactMotionsLPAllBindings.Length > 0;
 
@@ -271,8 +289,8 @@ $"One or more of the animations{multiText} animates properties that are not " +
                 fx,
                 enabledHandGestureIndices,
                 finalGestureMotions,
-                fx.IntParameter("GestureLeft"),
-                fx.IntParameter("GestureRight"),
+                "GestureLeft",
+                "GestureRight",
                 manualOverrideOnCond,
                 contactExpressionHPOnConds,
                 contactMotionsLP.Select(m => m.name).ToArray(),
@@ -283,7 +301,8 @@ $"One or more of the animations{multiText} animates properties that are not " +
                 anyEyesClosedMotions,
                 finalGestureMotionsEyesClosed,
                 contactMotionsLPEyesClosed,
-                target.TransitionDuration
+                target.TransitionDuration,
+                target.TransitionInterruption
             );
         }
         else {
@@ -312,22 +331,39 @@ $"One or more of the animations{multiText} animates properties that are not " +
                 contactMotionsHPAllBindings.Length > 1 &&
                 contactMotionsHPEyesClosed.canBeGrouped;
 
+            AacFlState s = null;
+            AacFlTransitionContinuation currentCombinedExitTransition = null;
             for (int i = 0; i < contactMotionsHPAllBindings.Length; i++) {
-                var s = smContactExpressionsHP.NewState(contactMotionsHP[i].name);
-                s.WithAnimation(contactMotionsHPAllBindings[i]);
-                if (!eyesClosedCanBeGrouped) {
+                bool combinedWithPrevious = false;
+                if (i != 0 && contactMotionsHPAllBindings[i] == contactMotionsHPAllBindings[i-1]) {
+                    combinedWithPrevious = true;
+                }
+                else {
+                    s = smContactExpressionsHP.NewState(contactMotionsHP[i].name);
+                    s.WithAnimation(contactMotionsHPAllBindings[i]);
+                }
+                if (!eyesClosedCanBeGrouped && !combinedWithPrevious) {
                     SetStateEyesClosed(s, anyEyesClosedMotions, contactMotionsHPEyesClosed[i]);
                 }
                 smContactExpressionsHP.EntryTransitionsTo(s)
                     .When(contactExpressionHPOnConds[i]);
-                s.Exits().WithTransitionDurationSeconds(target.TransitionDuration)
-                    .When(contactExpressionHPOffConds[i]);
-                if (useManualOverrides) {
-                    s.Exits().WithTransitionDurationSeconds(target.TransitionDuration)
+                if (!combinedWithPrevious) {
+                    currentCombinedExitTransition = s.Exits()
+                        .WithTransitionDurationSeconds(target.TransitionDuration)
+                        .WithConditionalDestinationInterruption(target.TransitionInterruption)
+                        .WhenConditions();
+                }
+                currentCombinedExitTransition.And(contactExpressionHPOffConds[i]);
+                if (useManualOverrides && !combinedWithPrevious) {
+                    s.Exits()
+                        .WithTransitionDurationSeconds(target.TransitionDuration)
+                        .WithConditionalDestinationInterruption(target.TransitionInterruption)
                         .When(manualOverrideOnCond);
                 }
-                if (usePauseContactExpressions) {
-                    s.Exits().WithTransitionDurationSeconds(target.TransitionDuration)
+                if (usePauseContactExpressions && !combinedWithPrevious) {
+                    s.Exits()
+                        .WithTransitionDurationSeconds(target.TransitionDuration)
+                        .WithConditionalDestinationInterruption(target.TransitionInterruption)
                         .When(pauseContactExpressionsParam.IsTrue());
                 }
             }
@@ -348,51 +384,64 @@ $"One or more of the animations{multiText} animates properties that are not " +
             // or a value that had no Motion set.
             var sDefault = smManualOverrides.NewState("[Default]");
             sDefault.WithAnimation(neutralMotionAllBindings);
-            // Exit from the default state when the param is 0 or any valid
-            // manual override value that has a Motion set. If a value had
-            // no Motion, it's removed from the manualOverrideMotion array
-            // and so manualOverrideMotionIndices will have a gap.
-            int largestIndex = manualOverrideMotionIndices[manualOverrideMotionIndices.Length-1];
-            var tDefaultExit = sDefault.Exits().WithTransitionDurationSeconds(target.TransitionDuration).WhenConditions();
-            tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsGreaterThan(-1));
-            tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsLessThan(largestIndex+1));
-            int prev = 0;
-            for (int i = 0; i < manualOverrideMotionIndices.Length; i++) {
-                if (manualOverrideMotionIndices[i] <= prev) {
-                    throw new Exception($"manualOverrideMotionIndices[{i}] is {manualOverrideMotionIndices[i]} which is <= {prev}. This is a bug.");
-                }
-                if (manualOverrideMotionIndices[i] != prev + 1) {
-                    for (int j = prev + 1; j < manualOverrideMotionIndices[i]; j++) {
-                        tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsNotEqualTo(j));
+            if (manualOverrideMotionIndices.Length > 0) {
+                // Exit from the default state when the param is 0 or any valid
+                // manual override value that has a Motion set. If a value had
+                // no Motion, it's removed from the manualOverrideMotion array
+                // and so manualOverrideMotionIndices will have a gap.
+                int largestIndex = manualOverrideMotionIndices[manualOverrideMotionIndices.Length-1];
+                var tDefaultExit = sDefault.Exits()
+                    .WithTransitionDurationSeconds(target.TransitionDuration)
+                    .WithConditionalDestinationInterruption(target.TransitionInterruption)
+                    .WhenConditions();
+                tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsGreaterThan(-1));
+                tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsLessThan(largestIndex+1));
+                int prev = 0;
+                for (int i = 0; i < manualOverrideMotionIndices.Length; i++) {
+                    if (manualOverrideMotionIndices[i] <= prev) {
+                        throw new Exception($"manualOverrideMotionIndices[{i}] is {manualOverrideMotionIndices[i]} which is <= {prev}. This is a bug.");
                     }
+                    if (manualOverrideMotionIndices[i] != prev + 1) {
+                        for (int j = prev + 1; j < manualOverrideMotionIndices[i]; j++) {
+                            tDefaultExit.And(fx.IntParameter(target.ManualOverrideParamName).IsNotEqualTo(j));
+                        }
+                    }
+                    prev = manualOverrideMotionIndices[i];
                 }
-                prev = manualOverrideMotionIndices[i];
-            }
 
-            // Can be grouped if all have the same eyes-closed value (all true or all false)
-            bool eyesClosedCanBeGrouped =
-                manualOverrideMotionsAllBindings.Length > 0 &&
-                manualOverrideMotionsEyesClosed.canBeGrouped &&
-                // Make sure that neutral, used above for [Default], is also the same as manual overrides
-                handGestureMotionsEyesClosed[0] == manualOverrideMotionsEyesClosed[0];
+                // Can be grouped if all have the same eyes-closed value (all true or all false)
+                bool eyesClosedCanBeGrouped =
+                    manualOverrideMotionsAllBindings.Length > 0 &&
+                    manualOverrideMotionsEyesClosed.canBeGrouped &&
+                    // Make sure that neutral, used above for [Default], is also the same as manual overrides
+                    handGestureMotionsEyesClosed[0] == manualOverrideMotionsEyesClosed[0];
 
-            for (int i = 0; i < manualOverrideMotionsAllBindings.Length; i++) {
-                var s = smManualOverrides.NewState(manualOverrideMotions[i].name);
-                s.WithAnimation(manualOverrideMotionsAllBindings[i]);
-                if (!eyesClosedCanBeGrouped) {
-                    SetStateEyesClosed(s, anyEyesClosedMotions, manualOverrideMotionsEyesClosed[i]);
+                for (int i = 0; i < manualOverrideMotionsAllBindings.Length; i++) {
+                    var s = smManualOverrides.NewState(manualOverrideMotions[i].name);
+                    s.WithAnimation(manualOverrideMotionsAllBindings[i]);
+                    if (!eyesClosedCanBeGrouped) {
+                        SetStateEyesClosed(s, anyEyesClosedMotions, manualOverrideMotionsEyesClosed[i]);
+                    }
+                    smManualOverrides.EntryTransitionsTo(s)
+                        .When(fx.IntParameter(target.ManualOverrideParamName).IsEqualTo(manualOverrideMotionIndices[i]));
+                    s.Exits()
+                        .WithTransitionDurationSeconds(target.TransitionDuration)
+                        .WithConditionalDestinationInterruption(target.TransitionInterruption)
+                        .When(fx.IntParameter(target.ManualOverrideParamName).IsNotEqualTo(manualOverrideMotionIndices[i]));
                 }
-                smManualOverrides.EntryTransitionsTo(s)
-                    .When(fx.IntParameter(target.ManualOverrideParamName).IsEqualTo(manualOverrideMotionIndices[i]));
-                s.Exits().WithTransitionDurationSeconds(target.TransitionDuration)
-                    .When(fx.IntParameter(target.ManualOverrideParamName).IsNotEqualTo(manualOverrideMotionIndices[i]));
-            }
 
-            if (eyesClosedCanBeGrouped) {
-                SetStateEyesClosed(smManualOverrides, anyEyesClosedMotions, manualOverrideMotionsEyesClosed[0]);
+                if (eyesClosedCanBeGrouped) {
+                    SetStateEyesClosed(smManualOverrides, anyEyesClosedMotions, manualOverrideMotionsEyesClosed[0]);
+                }
+                else {
+                    SetStateEyesClosed(sDefault, anyEyesClosedMotions, handGestureMotionsEyesClosed[0]);
+                }
             }
             else {
-                SetStateEyesClosed(sDefault, anyEyesClosedMotions, handGestureMotionsEyesClosed[0]);
+                sDefault.Exits()
+                    .WithTransitionDurationSeconds(target.TransitionDuration)
+                    .WithConditionalDestinationInterruption(target.TransitionInterruption)
+                    .When(fx.IntParameter(target.ManualOverrideParamName).IsEqualTo(0));
             }
         }
 
@@ -493,22 +542,16 @@ $"One or more of the animations{multiText} animates properties that are not " +
         out int[] enabledGestureIndices,
         out Motion[] enabledGestureMotions)
     {
-        Motion[] handGestureMotions = target.HandGestureExpressions;
-
-        // Combo mode remap. Converts all modes into the equivalent values for "asymmetric" mode.
-        handGestureMotions = MGGUtil.RemapComboGestureArrayUsingMode(handGestureMotions, target.ComboGestureMode);
-
         // Remove elements from the list that correspond to disabled gestures.
-
         Func<int, bool> gestureIsEnabled = (i) => i==0 || (((int)target.EnabledGestures) & (1 << i)) == (1 << i);
 
-        var enabledGesturesList = new List<int>();
-        for (int i = 0; i < MGGUtil.NumStandardGestures; i++) {
-            if (gestureIsEnabled(i)) {
-                enabledGesturesList.Add(i);
-            }
-        }
-        enabledGestureIndices = enabledGesturesList.ToArray();
+        enabledGestureIndices = Enumerable
+            .Range(0, MGGUtil.NumStandardGestures)
+            .Where(i => gestureIsEnabled(i))
+            .ToArray();
+
+        // Combo mode remap. Converts all modes into the equivalent values for "asymmetric" mode.
+        Motion[] handGestureMotions = MGGUtil.RemapComboGestureArrayUsingMode(target.HandGestureExpressions, target.ComboGestureMode);
 
         int sideLength = enabledGestureIndices.Length;
         enabledGestureMotions = new Motion[sideLength * sideLength];
@@ -519,12 +562,15 @@ $"One or more of the animations{multiText} animates properties that are not " +
             for (int j = 0; j < MGGUtil.NumStandardGestures; j++) {
                 if (!gestureIsEnabled(j)) { continue; }
                 enabledGestureMotions[k] = handGestureMotions[i*MGGUtil.NumStandardGestures + j];
-                // Replace Unity's "fake null" with a real null, so that ?? operator works
-                // https://blog.unity.com/engine-platform/custom-operator-should-we-keep-it
-                if (enabledGestureMotions[k] == null) {
-                    enabledGestureMotions[k] = null;
-                }
                 k++;
+            }
+        }
+
+        // Replace Unity's "fake null" with a real null, so that ?? operator works
+        // https://blog.unity.com/engine-platform/custom-operator-should-we-keep-it
+        for (int i = 0; i < enabledGestureMotions.Length; i++) {
+            if (enabledGestureMotions[i] == null) {
+                enabledGestureMotions[i] = null;
             }
         }
     }
@@ -699,7 +745,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         public int Length {
             get => array.Length;
         }
-        
+
         // Can be grouped if all have the same eyes-closed value (all true or all false)
         public bool canBeGrouped {
             get => !any || all;
@@ -791,8 +837,8 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         AacFlLayer fx,
         int[] gestureParamValues,
         Motion[,] gestureMotions,
-        AacFlIntParameter leftParam,
-        AacFlIntParameter rightParam,
+        string leftParamName,
+        string rightParamName,
         IAacFlCondition manualOverrideCondition,
         IEnumerable<IAacFlCondition> contactExpressionConditions,
         string[] contactMotionsLPNames,
@@ -803,7 +849,8 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         bool anyEyesClosedMotions,
         bool[,] gestureMotionsEyesClosed,
         EyesClosedInfo contactMotionsLPEyesClosed,
-        float transitionDuration)
+        float transitionDuration,
+        bool transitionInterruption)
     {
         if (gestureParamValues.Length == 0) {
             throw new ArgumentException($"gestureParamValues array is empty");
@@ -851,13 +898,15 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
 
         AacFlTransition[] exitState(AacFlState[] state)
         {
-            return state.Exits().WithTransitionDurationSeconds(transitionDuration);
+            return state.Exits()
+                .WithTransitionDurationSeconds(transitionDuration)
+                .WithConditionalDestinationInterruption(transitionInterruption);
         }
 
         void generateEntryTransitionsForState(
             AacAnimatorNode state,
             int[] copyIndices,
-            AacFlIntParameter param,
+            string paramName,
             bool isDefaultState)
         {
             if (isDefaultState) {
@@ -878,6 +927,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                         lastConsecutive = consecutive;
                     }
 
+                    AacFlIntParameter param = fx.IntParameter(paramName);
                     if (numConsecutive > 0) {
                         state.TransitionsFromEntry()
                             .When(param.IsGreaterThan(gestureVal - 1))
@@ -904,7 +954,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         AacFlTransitionContinuation[] generateExitTransitionsForState(
             AacFlState[] state,
             int[] copyIndices,
-            AacFlIntParameter param,
+            string paramName,
             bool isDefaultState)
         {
             AacFlTransitionContinuation[] conditions = null;
@@ -917,10 +967,16 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 // If there are no other gestures to go to (for this particular
                 // parameter), then don't generate any exit transition.
                 if (noncopyIndices.Length == 0) {
-                    ;
+                    // IntParameter below has the side effect of creating the parameter
+                    // if it doesn't exist, so return here to avoid calling it until
+                    // we actually end up needing the parameter.
+                    return null;
                 }
+
+                AacFlIntParameter param = fx.IntParameter(paramName);
+
                 // Only one other gesture to go to, simple exit transition
-                else if (noncopyIndices.Length == 1) {
+                if (noncopyIndices.Length == 1) {
                     conditions = exitState(state)
                         .When(param.IsEqualTo(gestureParamValues[noncopyIndices[0]]));
                 }
@@ -956,6 +1012,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 }
             }
             else {
+                AacFlIntParameter param = fx.IntParameter(paramName);
                 conditions = exitState(state).WhenConditions();
                 for (int i = 0; i < copyIndices.Length; i++) {
                     conditions.And(param.IsNotEqualTo(gestureParamValues[copyIndices[i]]));
@@ -1004,12 +1061,23 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
             out_states[0] = neutral;
 
             AacFlState[] cstates = new AacFlState[contactMotionsLP.Length];
+            AacFlTransitionContinuation currentCombinedExitTransition = null;
+            bool anyCombined = false;
             for (int i = 0; i < contactMotionsLP.Length; i++) {
                 var paramName = contactParamNamesLP[i];
 
-                cstates[i] = sm.NewState(contactMotionsLPNames[i]);
-                cstates[i].WithAnimation(contactMotionsLP[i]);
-                if (!contactMotionsLPeyesClosedCanBeGrouped) {
+                bool combinedWithPrevious = false;
+                if (i != 0 && contactMotionsLP[i] == contactMotionsLP[i-1]) {
+                    cstates[i] = cstates[i-1];
+                    combinedWithPrevious = true;
+                    anyCombined = true;
+                }
+                else {
+                    cstates[i] = sm.NewState(contactMotionsLPNames[i]);
+                    cstates[i].WithAnimation(contactMotionsLP[i]);
+                }
+
+                if (!contactMotionsLPeyesClosedCanBeGrouped && !combinedWithPrevious) {
                     SetStateEyesClosed(cstates[i], anyEyesClosedMotions, contactMotionsLPEyesClosed[i]);
                 }
                 var entry = sm.EntryTransitionsTo(cstates[i])
@@ -1022,26 +1090,45 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 // ones earlier in the list. Overall this will make 1+2+3+4... transitions
                 // for the number of these contactMotionsLP states which is not ideal but
                 // there shouldn't normally be many of these. Probably just one or two!
-                for (int j = 0; j < i; j++) {
-                    cstates[i].TransitionsTo(cstates[j])
-                        .WithTransitionDurationSeconds(transitionDuration)
-                        .When(fx.FloatParameter(contactParamNamesLP[j]).IsGreaterThan(FloatParamThreshold));
+                if (!combinedWithPrevious) {
+                    for (int j = 0; j < i; j++) {
+                        cstates[i].TransitionsTo(cstates[j])
+                            .WithTransitionDurationSeconds(transitionDuration)
+                            .WithConditionalDestinationInterruption(transitionInterruption)
+                            .When(fx.FloatParameter(contactParamNamesLP[j]).IsGreaterThan(FloatParamThreshold));
+                    }
                 }
-                cstates[i].TransitionsTo(neutral)
-                    .WithTransitionDurationSeconds(transitionDuration)
-                    .When(fx.FloatParameter(paramName).IsLessThan(FloatParamThreshold));
+
+                if (!combinedWithPrevious) {
+                    currentCombinedExitTransition = cstates[i].TransitionsTo(neutral)
+                        .WithTransitionDurationSeconds(transitionDuration)
+                        .WithConditionalDestinationInterruption(transitionInterruption)
+                        .WhenConditions();
+                }
+                currentCombinedExitTransition
+                    .And(fx.FloatParameter(paramName).IsLessThan(FloatParamThreshold));
+
                 var tNeutralToCstate = neutral.TransitionsTo(cstates[i])
                     .WithTransitionDurationSeconds(transitionDuration)
+                    .WithConditionalDestinationInterruption(transitionInterruption)
                     .When(fx.FloatParameter(paramName).IsGreaterThan(FloatParamThreshold));
+
                 if (pauseContactExpressionsParam != null) {
-                    cstates[i].TransitionsTo(neutral)
-                        .WithTransitionDurationSeconds(transitionDuration)
-                        .When(pauseContactExpressionsParam.IsTrue());
+                    if (!combinedWithPrevious) {
+                        cstates[i].TransitionsTo(neutral)
+                            .WithTransitionDurationSeconds(transitionDuration)
+                            .WithConditionalDestinationInterruption(transitionInterruption)
+                            .When(pauseContactExpressionsParam.IsTrue());
+                    }
                     tNeutralToCstate
                         .And(pauseContactExpressionsParam.IsFalse());
                 }
 
-                out_states[i+1] = cstates[i];
+                out_states[i+1] = combinedWithPrevious ? null : cstates[i];
+            }
+
+            if (anyCombined) {
+                out_states = out_states.Where(x => x != null).ToArray();
             }
 
             if (!contactMotionsLPeyesClosedCanBeGrouped) {
@@ -1078,7 +1165,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
             });
 
         AacFlStateMachine smRoot = fx.NewSubStateMachine("Gesture Expressions");
-        AacFlStateMachine[] all_smLHands = new AacFlStateMachine[uniqueLHandGestures.Length];
+        AacAnimatorNode[] all_sLHands = new AacAnimatorNode[uniqueLHandGestures.Length];
         for (int i = 0; i < uniqueLHandGestures.Length; i++) {
             // The "copies" represent all the gestures which use the same motions
             // and so can be combined into the same state. Each entry in this array
@@ -1088,23 +1175,42 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
             // There is always at least one "copy" for a gesture. This is the primary.
             int lGestureIndex = lCopyIndices[0];
 
-            AacFlStateMachine smLHand =
-                smRoot.NewSubStateMachine(nameForGestureState(null, "L", lCopyIndices));
-            all_smLHands[i] = smLHand;
-
-            if (i == 0 && pauseHandGesturesParam != null) {
-                smLHand.TransitionsFromEntry()
-                    .When(pauseHandGesturesParam.IsTrue());
-            }
-
-            if (uniqueLHandGestures.Length > 1) {
-                generateEntryTransitionsForState(smLHand, lCopyIndices, leftParam, i==0);
-            }
-            smLHand.Exits();
-
             int[][] uniqueRHandGestures = FindUnique(gestureParamValues.Length,
                 // Two RHand states are equal if their motions are equal
                 (a,b) => gestureMotions[lGestureIndex,a] == gestureMotions[lGestureIndex,b]);
+
+            // When all the LHands are the same, we can avoid a SubStateMachine nesting
+            // and collapse everything into just single nodes for RHand states.
+            // Similarly, when all RHands are the same for a given LHand, we can
+            // just make the RHand node a single state instead of a SubStateMachine.
+            bool allLHandsAreSame = (uniqueLHandGestures.Length == 1);
+            bool allRHandsAreSameForThisLHand = (uniqueRHandGestures.Length == 1);
+
+            if (allLHandsAreSame && allRHandsAreSameForThisLHand) {
+                // Shouldn't be possible because it implies there are no gestures except
+                // neutral, and if that were the case, this entire function shouldn't
+                // have been called.
+                throw new Exception("Unexpected state - allLHandsAreSame and allRHandsAreSameForThisLHand are both true");
+            }
+
+            AacFlStateMachine smLHand;
+            if (allLHandsAreSame || allRHandsAreSameForThisLHand) {
+                smLHand = smRoot;
+            }
+            else {
+                smLHand = smRoot.NewSubStateMachine(nameForGestureState(null, "L", lCopyIndices));
+                all_sLHands[i] = smLHand;
+
+                if (i == 0 && pauseHandGesturesParam != null) {
+                    smLHand.TransitionsFromEntry()
+                        .When(pauseHandGesturesParam.IsTrue());
+                }
+
+                if (uniqueLHandGestures.Length > 1) {
+                    generateEntryTransitionsForState(smLHand, lCopyIndices, leftParamName, i==0);
+                }
+                smLHand.Exits();
+            }
 
             AacAnimatorNode[] all_sRHands = new AacAnimatorNode[uniqueRHandGestures.Length];
             bool allSameEyesClosed = true;
@@ -1116,7 +1222,16 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 int rGestureIndex = rCopyIndices[0];
 
                 Motion motion = gestureMotions[lGestureIndex, rGestureIndex];
-                string rStateName = nameForGestureState("L"+gestureParamValues[lGestureIndex], "R", rCopyIndices);
+                string rStateName;
+                if (allLHandsAreSame) {
+                    rStateName = nameForGestureState(null, "R", rCopyIndices);
+                }
+                else if (allRHandsAreSameForThisLHand) {
+                    rStateName = nameForGestureState(null, "L", lCopyIndices);
+                }
+                else {
+                    rStateName = nameForGestureState("L"+gestureParamValues[lGestureIndex], "R", rCopyIndices);
+                }
 
                 // The "substates" array is to facilitate the low-priority contact
                 // expressions, which act like normal gesture states but actually
@@ -1161,6 +1276,13 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                     }
                 }
 
+                // When there's only one RHand gesture for an LHand gesture,
+                // no SubStateMachine for the LHand is created, so the sRHand
+                // needs to be put in its place for all_sLHands.
+                if ( allRHandsAreSameForThisLHand ||
+                     (allLHandsAreSame && j == 0)) {
+                    all_sLHands[i] = sRHand;
+                }
                 all_sRHands[j] = sRHand;
 
                 if (i == 0 && j == 0 && pauseHandGesturesParam != null) {
@@ -1168,12 +1290,16 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                         .When(pauseHandGesturesParam.IsTrue());
                 }
 
-                if (uniqueRHandGestures.Length > 1) {
-                    generateEntryTransitionsForState(sRHand, rCopyIndices, rightParam, j==0);
+                if (allRHandsAreSameForThisLHand) {
+                    // We're not in a LHand SubStateMachine, so make entry transitions
+                    // directly from the root state machine.
+                    generateEntryTransitionsForState(sRHand, lCopyIndices, leftParamName, i==0);
+                } else {
+                    generateEntryTransitionsForState(sRHand, rCopyIndices, rightParamName, j==0);
                 }
 
-                var lExitCond = generateExitTransitionsForState(sRHandSubstates, rCopyIndices, rightParam, j==0);
-                var rExitCond = generateExitTransitionsForState(sRHandSubstates, lCopyIndices, leftParam, i==0);
+                var lExitCond = generateExitTransitionsForState(sRHandSubstates, rCopyIndices, rightParamName, j==0);
+                var rExitCond = generateExitTransitionsForState(sRHandSubstates, lCopyIndices, leftParamName, i==0);
 
                 if (pauseHandGesturesParam != null) {
                     // For the "true neutral" state, don't exit (based on the hand
@@ -1210,7 +1336,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 // Put the Tracking behavior on the LHand state machine if all the
                 // contained states have the same eyes closed value. This just reduces
                 // the number of behaviors, which is nice.
-                if (allSameEyesClosed) {
+                if (allSameEyesClosed && !allRHandsAreSameForThisLHand) {
                     SetStateEyesClosed(smLHand, true, eyesClosedExpect);
                 }
                 else {
@@ -1235,16 +1361,18 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
                 }
             }
 
-            // Make a "catch all" transition to neutral, for gesture number 0,
-            // as well as any disabled gestures. This works slightly differently
-            // than the automatic default transition (orange line) because the
-            // default transition will always jump straight to the innermost
-            // state, instead of following Entry transitions on the statemachines.
-            // We want it to follow entry transitions on the state machines.
-            all_sRHands[0].TransitionsFromEntry();
+            if (!(allLHandsAreSame || allRHandsAreSameForThisLHand)) {
+                // Make a "catch all" transition to neutral, for gesture number 0,
+                // as well as any disabled gestures. This works slightly differently
+                // than the automatic default transition (orange line) because the
+                // default transition will always jump straight to the innermost
+                // state, instead of following Entry transitions on the statemachines.
+                // We want it to follow entry transitions on the state machines.
+                all_sRHands[0].TransitionsFromEntry();
+            }
         }
 
-        all_smLHands[0].TransitionsFromEntry();
+        all_sLHands[0].TransitionsFromEntry();
 
         return smRoot;
     }
@@ -1279,7 +1407,7 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
     }
 
 #if USE_AAC_VRC_EXTENSIONS
-    static public void SetStateEyesClosed<TNode>(TNode state, bool anyEyesClosedMotions, bool hasEyesClosed) where TNode : AacAnimatorNode<TNode> 
+    static public void SetStateEyesClosed<TNode>(TNode state, bool anyEyesClosedMotions, bool hasEyesClosed) where TNode : AacAnimatorNode<TNode>
     {
         if (anyEyesClosedMotions) {
             if (hasEyesClosed) {
@@ -1852,6 +1980,11 @@ static internal class MMG_AacExtensions
         }
     }
 
+    static public AacFlTransition WithConditionalDestinationInterruption(this AacFlTransition t, bool doInterruption)
+    {
+        return doInterruption ? t.WithInterruption(TransitionInterruptionSource.Destination) : t;
+    }
+
 
     // Array extensions - allows adding transitions to multiple states at once.
     // I've only implemented the functions needed for the existing code here.
@@ -1864,6 +1997,11 @@ static internal class MMG_AacExtensions
     static public AacFlTransition[] WithTransitionDurationSeconds(this AacFlTransition[] transitions, float duration)
     {
         return transitions.Select(t => t.WithTransitionDurationSeconds(duration)).ToArray();
+    }
+
+    static public AacFlTransition[] WithConditionalDestinationInterruption(this AacFlTransition[] transitions, bool doInterruption)
+    {
+        return transitions.Select(t => t.WithConditionalDestinationInterruption(doInterruption)).ToArray();
     }
 
     static public AacFlTransitionContinuation[] When(this AacFlNewTransitionContinuation[] transitions, IAacFlCondition action)
@@ -2097,7 +2235,7 @@ static public class MGGAnimatorUtils
             var recursivePotentialMotionsToRemoveFiltered = recursivePotentialMotionsToRemove.Where(o => isOkToRemove(o));
 
             var recursiveMotionsUsedInOtherLayers = new HashSet<Motion>();
-            var foundStateMachines = new HashSet<AnimatorStateMachine>(); 
+            var foundStateMachines = new HashSet<AnimatorStateMachine>();
             foreach (AnimatorControllerLayer l in controller.layers) {
                 if (l.name != layer.name) {
                     recursiveCollectMotionsInSM(l.stateMachine, foundStateMachines, recursiveMotionsUsedInOtherLayers);

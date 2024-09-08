@@ -15,8 +15,11 @@ public class MinimalGestureGenerator : MonoBehaviour
     // It's called "fx" because its normally the avatar's FX controller,
     // but it can really be anything.
     public AnimatorController FXController;
+    public const string DefaultLayerName = "MGG__Expressions";
+    public string LayerName;
 
     public AnimatorController AssetContainer;
+    public string AssetKeyName;
 
     public MGGUtil.StandardGestureFlag EnabledGestures = MGGUtil.StandardGestureFlagAll;
     public MGGUtil.ComboGestureMode ComboGestureMode = MGGUtil.ComboGestureMode.Symmetric;
@@ -27,11 +30,12 @@ public class MinimalGestureGenerator : MonoBehaviour
     public Motion[] EyesClosedMotions; // Variable length
 
     public float TransitionDuration = 0.2f;
+    public bool TransitionInterruption = false;
     public bool UseWriteDefaults = false;
     public AvatarMask Mask = null;
 
     public bool UseContactExpressions = false;
-    public bool UseManualOverrideExpressions = false;    
+    public bool UseManualOverrideExpressions = false;
     public bool UsePauseHandGestures = false;
     public bool UsePauseContactExpressions = false;
 
@@ -42,6 +46,12 @@ public class MinimalGestureGenerator : MonoBehaviour
     public string PauseHandGesturesParamName = DefaultPauseHandGesturesParamName;
     public string PauseContactExpressionsParamName = DefaultPauseContactExpressionsParamName;
     public string ManualOverrideParamName = DefaultManualOverrideParamName;
+
+    void OnValidate()
+    {
+        AssetKeyName = (AssetKeyName == null) ? "" : AssetKeyName.Trim();
+        LayerName = (LayerName == null) ? "" : LayerName.Trim();
+    }
 }
 
 // Note this should be a struct, not a class, otherwise the code for
