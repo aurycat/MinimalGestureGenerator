@@ -107,15 +107,33 @@ $"{neededParam.Item4} parameter, and then try again.");
         // Prepare all-bindings motion lists
         //
 
-        int totalNumMotions = handGestureMotions.Length + contactMotionsHP.Length + contactMotionsLP.Length + manualOverrideMotions.Length;
+        Motion neutralMotion = handGestureMotions[0];
+
+        int totalNumMotions =
+              handGestureMotions.Length
+            + contactMotionsHP.Length
+            + contactMotionsLP.Length
+            + manualOverrideMotions.Length
+            + (target.UseIsLocalCheck ? 1 : 0);
 
         Motion[] allMotions = new Motion[totalNumMotions];
-        handGestureMotions.CopyTo(allMotions, 0);
-        contactMotionsHP.CopyTo(allMotions, handGestureMotions.Length);
-        contactMotionsLP.CopyTo(allMotions, handGestureMotions.Length + contactMotionsHP.Length);
-        manualOverrideMotions.CopyTo(allMotions, handGestureMotions.Length + contactMotionsHP.Length + contactMotionsLP.Length);
+        int end = 0;
+        handGestureMotions.CopyTo(allMotions, end);    end += handGestureMotions.Length;
+        contactMotionsHP.CopyTo(allMotions, end);      end += contactMotionsHP.Length;
+        contactMotionsLP.CopyTo(allMotions, end);      end += contactMotionsLP.Length;
+        manualOverrideMotions.CopyTo(allMotions, end); end += manualOverrideMotions.Length;
 
-        Motion neutralMotion = handGestureMotions[0];
+        if (target.UseIsLocalCheck) {
+            allMotions[end] = target.IsRemoteClip;
+            end += 1;
+            if (target.IsLocalClip != null) {
+                bool hadNeutralMotion = (neutralMotion != null);
+                neutralMotion = MergeClips(neutralMotion, target.IsLocalClip);
+                if (!hadNeutralMotion) {
+                    neutralMotion.name = "AutoNeutral";
+                }
+            }
+        }
 
         Motion[] allMotionsAllBindings;
         Motion[] allGeneratedMotions; // Includes neutral
@@ -158,47 +176,36 @@ $"One or more of the animations{multiText} animates properties that are not " +
         Motion[] contactMotionsLPAllBindings = new Motion[contactMotionsLP.Length];
         Motion[] manualOverrideMotionsAllBindings = new Motion[manualOverrideMotions.Length];
 
-        Array.Copy(allMotionsAllBindings, 0,
+        end = 0;
+        Array.Copy(allMotionsAllBindings, end,
                    handGestureMotionsAllBindings, 0,
-                   handGestureMotions.Length);
-        Array.Copy(allMotionsAllBindings, handGestureMotions.Length,
+                   handGestureMotionsAllBindings.Length);
+        end += handGestureMotionsAllBindings.Length;
+        Array.Copy(allMotionsAllBindings, end,
                    contactMotionsHPAllBindings, 0,
                    contactMotionsHPAllBindings.Length);
-        Array.Copy(allMotionsAllBindings, handGestureMotions.Length + contactMotionsHP.Length,
+        end += contactMotionsHPAllBindings.Length;
+        Array.Copy(allMotionsAllBindings, end,
                    contactMotionsLPAllBindings, 0,
                    contactMotionsLPAllBindings.Length);
-        Array.Copy(allMotionsAllBindings, handGestureMotions.Length + contactMotionsHP.Length + contactMotionsLP.Length,
+        end += contactMotionsLPAllBindings.Length;
+        Array.Copy(allMotionsAllBindings, end,
                    manualOverrideMotionsAllBindings, 0,
                    manualOverrideMotionsAllBindings.Length);
+        end += manualOverrideMotionsAllBindings.Length;
+
+        AnimationClip isRemoteClipAllBindings = null;
+        if (target.UseIsLocalCheck) {
+            isRemoteClipAllBindings = allMotionsAllBindings[end] as AnimationClip;
+            end += 1;
+        }
 
 
         //
         // Setup animator controller output using AnimatorAsCode
         //
 
-        string assetKeyName = String.IsNullOrEmpty(target.AssetKeyName)
-            ? target.AvatarRoot.gameObject.name : target.AssetKeyName;
-        string layerName = String.IsNullOrEmpty(target.LayerName)
-            ? MinimalGestureGenerator.DefaultLayerName : target.LayerName;
-
-        if (target.ComboGestureMode == MGGUtil.ComboGestureMode.LeftOnly) {
-            assetKeyName += "_L";
-            layerName += " Left";
-        }
-        else if (target.ComboGestureMode == MGGUtil.ComboGestureMode.RightOnly) {
-            assetKeyName += "_R";
-            layerName += " Right";
-        }
-
-        AacConfiguration config = new AacConfiguration {
-            SystemName = layerName,
-            AssetKey = assetKeyName,
-            AnimatorRoot = target.AvatarRoot.transform,
-            DefaultValueRoot = target.AvatarRoot.transform,
-            AssetContainer = target.AssetContainer,
-            DefaultsProvider = new AacDefaultsProvider(target.UseWriteDefaults),
-        };
-
+        AacConfiguration config = GetAACConfig(target);
         AacFlBase aac = AacV1.Create(config);
 
         // Save newly generated clips to the asset container
@@ -215,7 +222,7 @@ $"One or more of the animations{multiText} animates properties that are not " +
 
         // Find existing layer MGG anim layer, if present
         AnimatorControllerLayer existingLayer =
-            target.FXController.layers.FirstOrDefault(l => l.name == layerName);
+            target.FXController.layers.FirstOrDefault(l => l.name == config.SystemName);
 
         // CreateMainArbitraryControllerLayer already clears the layer,
         // but MGGAnimatorUtils.ClearLayer can do it MUCH faster, and without
@@ -265,6 +272,13 @@ $"One or more of the animations{multiText} animates properties that are not " +
                 contactExpressionHPOnConds.Add(fx.FloatParameter(p).IsGreaterThan(FloatParamThreshold));
                 contactExpressionHPOffConds.Add(fx.FloatParameter(p).IsLessThan(FloatParamThreshold));
             }
+        }
+
+        AacFlState sLocalCheck = null;
+        if (target.UseIsLocalCheck) {
+            sLocalCheck = fx.NewState("Local Check");
+            sLocalCheck.WithAnimation(isRemoteClipAllBindings);
+            sLocalCheck.TransitionsFromAny().When(fx.BoolParameter("IsLocal").IsFalse());
         }
 
         // Generate the state machine for hand gestures
@@ -318,6 +332,10 @@ $"One or more of the animations{multiText} animates properties that are not " +
         }
 
         AacAnimatorNode smGestureOrNeutral = smGesture != null ? smGesture : sNeutralOnly;
+
+        if (target.UseIsLocalCheck) {
+            sLocalCheck.TransitionsTo(smGestureOrNeutral).When(fx.BoolParameter("IsLocal").IsTrue());
+        }
 
         // Generate the state machine for handling contact expressions
         AacFlStateMachine smContactExpressionsHP = null;
@@ -1422,8 +1440,78 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
     static public void SetStateEyesClosed(AacAnimatorNode n, bool x, bool y) { }
 #endif
 
-    // Acts like RecreateClipsToHaveAllTheSameAnimatedProperties except this supports Motion
-    // arrays containing BlendTrees. Otherwise the arguments work the same way.
+    static public void ClearPreviousAssets(MinimalGestureGenerator target)
+    {
+        AacConfiguration config = GetAACConfig(target);
+        AacFlBase aac = AacV1.Create(config);
+        aac.ClearPreviousAssets(); // Only clears assets with the given AssetKey
+    }
+
+    static public AacConfiguration GetAACConfig(MinimalGestureGenerator target)
+    {
+        string assetKeyName = String.IsNullOrEmpty(target.AssetKeyName)
+            ? target.AvatarRoot.gameObject.name : target.AssetKeyName;
+        string layerName = String.IsNullOrEmpty(target.LayerName)
+            ? MinimalGestureGenerator.DefaultLayerName : target.LayerName;
+
+        if (target.ComboGestureMode == MGGUtil.ComboGestureMode.LeftOnly) {
+            assetKeyName += "_L";
+            layerName += " Left";
+        }
+        else if (target.ComboGestureMode == MGGUtil.ComboGestureMode.RightOnly) {
+            assetKeyName += "_R";
+            layerName += " Right";
+        }
+
+        AacConfiguration config = new AacConfiguration {
+            SystemName = layerName,
+            AssetKey = assetKeyName,
+            AnimatorRoot = target.AvatarRoot.transform,
+            DefaultValueRoot = target.AvatarRoot.transform,
+            AssetContainer = target.AssetContainer,
+            DefaultsProvider = new AacDefaultsProvider(target.UseWriteDefaults),
+        };
+
+        return config;
+    }
+
+    // Merges a and b and returns the generated motion which must be saved to
+    // the asset container. 'a' can be a clip or a blend tree.
+    static public Motion MergeClips(Motion a, AnimationClip b)
+    {
+        Motion[] motions = new Motion[1];
+        motions[0] = a;
+
+        Motion[] newMotions;
+        Motion[] generatedMotions;
+        Motion newNeutral;
+        EditorCurveBinding[] missingBindings;
+        AnimationClip allBindingsClip;
+
+        bool OK = RecreateMotionsToHaveAllTheSameAnimatedProperties(
+            motions,
+            b,
+            null,
+            out newMotions,
+            out generatedMotions,
+            out newNeutral,
+            out missingBindings,
+            out allBindingsClip,
+            false);
+
+        if (!OK) {
+            // I don't think it should be possible for RecreateMotionsToHaveAllTheSameAnimatedProperties
+            // to fail when used in this way.
+            throw new Exception("Fail in MergeClips");
+        }
+
+        return newMotions[0];
+    }
+
+    // Acts like RecreateClipsToHaveAllTheSameAnimatedProperties except this
+    // supports Motion arrays containing BlendTrees. Also, 'generatedMotions'
+    // output will include the 'newNeutral'. Otherwise the arguments work the
+    // same way.
     static public bool RecreateMotionsToHaveAllTheSameAnimatedProperties(
         Motion[] motions,
         Motion neutral,
@@ -1432,7 +1520,8 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         out Motion[] generatedMotions,
         out Motion newNeutral,
         out EditorCurveBinding[] missingBindings,
-        out AnimationClip allBindingsClip)
+        out AnimationClip allBindingsClip,
+        bool fillInNullMotionsInBlendTree = true)
     {
         var clips = new List<AnimationClip>();
         var toplevelBlendTrees = new List<BlendTree>();
@@ -1548,21 +1637,23 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
             BlendTree newNeutralBlendTree = oldToNewBlendTreeMap[neutral as BlendTree];
             newNeutral = newNeutralBlendTree as Motion;
 
-            // When the neutral motion is a blend tree, find all the blend trees
-            // referenced by it and replace any null motions with the newNeutralClip.
-            // We don't want to replace null motions in these with the new neutral
-            // motion BlendTree because that would make a circular reference!
-            var blendTreesUsedByNeutral = new HashSet<BlendTree>();
-            blendTreesUsedByNeutral.Add(newNeutralBlendTree);
-            FindChildBlendTrees(newNeutralBlendTree, blendTreesUsedByNeutral);
-            foreach(BlendTree bt in blendTreesUsedByNeutral) {
-                ChildMotion[] cms = bt.children;
-                for (int i = 0; i < cms.Length; i++) {
-                    if (cms[i].motion == null) {
-                        cms[i].motion = newNeutralClip;
+            if (fillInNullMotionsInBlendTree) {
+                // When the neutral motion is a blend tree, find all the blend trees
+                // referenced by it and replace any null motions with the newNeutralClip.
+                // We don't want to replace null motions in these with the new neutral
+                // motion BlendTree because that would make a circular reference!
+                var blendTreesUsedByNeutral = new HashSet<BlendTree>();
+                blendTreesUsedByNeutral.Add(newNeutralBlendTree);
+                FindChildBlendTrees(newNeutralBlendTree, blendTreesUsedByNeutral);
+                foreach(BlendTree bt in blendTreesUsedByNeutral) {
+                    ChildMotion[] cms = bt.children;
+                    for (int i = 0; i < cms.Length; i++) {
+                        if (cms[i].motion == null) {
+                            cms[i].motion = newNeutralClip;
+                        }
                     }
+                    bt.children = cms;
                 }
-                bt.children = cms;
             }
 
             // Now it's safe to replace all remaining null motions in
@@ -1573,14 +1664,16 @@ $"exists in the FX Controller and is not a Float type (it is a {p.type.ToString(
         }
 
         // Replace nulls in blend trees with newNeutral
-        foreach(BlendTree bt in newAllBlendTrees) {
-            ChildMotion[] cms = bt.children;
-            for (int i = 0; i < cms.Length; i++) {
-                if (cms[i].motion == null) {
-                    cms[i].motion = newNeutral;
+        if (fillInNullMotionsInBlendTree) {
+            foreach(BlendTree bt in newAllBlendTrees) {
+                ChildMotion[] cms = bt.children;
+                for (int i = 0; i < cms.Length; i++) {
+                    if (cms[i].motion == null) {
+                        cms[i].motion = newNeutral;
+                    }
                 }
+                bt.children = cms;
             }
-            bt.children = cms;
         }
 
         // Create newMotions array using the new clips and new blend trees

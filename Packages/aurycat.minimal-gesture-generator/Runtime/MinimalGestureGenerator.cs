@@ -47,6 +47,10 @@ public class MinimalGestureGenerator : MonoBehaviour
     public string PauseContactExpressionsParamName = DefaultPauseContactExpressionsParamName;
     public string ManualOverrideParamName = DefaultManualOverrideParamName;
 
+    public bool UseIsLocalCheck = false;
+    public AnimationClip IsLocalClip = null;
+    public AnimationClip IsRemoteClip = null;
+
     void OnValidate()
     {
         AssetKeyName = (AssetKeyName == null) ? "" : AssetKeyName.Trim();

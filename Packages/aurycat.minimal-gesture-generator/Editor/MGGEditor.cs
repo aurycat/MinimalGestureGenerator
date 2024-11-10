@@ -43,6 +43,7 @@ public class MGGEditor : Editor
     GUIContent neutralExpressionLabel;
     GUIContent enabledHandGesturesLabel;
     GUIContent createNewBlendTreeLabel;
+    GUIContent clearAssetsLabel;
     GUIContent clearAllHandGestureMotionsLabel;
     GUIContent writeDefaultsInfoLinkLabel;
     GUIContent dbtInfoLinkLabel;
@@ -90,6 +91,7 @@ public class MGGEditor : Editor
         neutralExpressionLabel = new GUIContent("Neutral Expression");
         enabledHandGesturesLabel = new GUIContent("Enabled Hand Gestures");
         createNewBlendTreeLabel = new GUIContent("Create new BlendTree asset");
+        clearAssetsLabel = new GUIContent("Clear Existing Generated Assets");
         clearAllHandGestureMotionsLabel = new GUIContent("Clear All Hand Gesture Motions");
         writeDefaultsInfoLinkLabel = new GUIContent($"Visit {writeDefaultsInfoURL} for more info about Write Defaults");
         dbtInfoLinkLabel = new GUIContent($"Visit {dbtInfoURL} for more info about Direct Blend Trees");
@@ -193,10 +195,10 @@ public class MGGEditor : Editor
 
         EditorGUILayout.Space(15);
 
-        {
-            bool disableGenerate =
-                noAvatarRoot || noFXController;
+        bool disableGenerate =
+            noAvatarRoot || noFXController;
 
+        {
             GUIStyle backupWarningLabel = new GUIStyle();
             backupWarningLabel.fontStyle = FontStyle.Bold;
             backupWarningLabel.normal.textColor = Color.red;
@@ -643,6 +645,22 @@ $"Manual Expressions use a single shared integer property with the name given " 
             EditorGUILayout.HelpBox(
 "BlendTree assets can be used in place of AnimationClips above for more complex " +
 "expressions such as face puppets.", MessageType.Info);
+
+            if (targets.Length == 1 && !disableGenerate && !noAssetContainer) {
+                EditorGUILayout.Space(10);
+                if (IndentedButton(clearAssetsLabel)) {
+                    try {
+                        AssetDatabase.StartAssetEditing();
+                        MGGMain.ClearPreviousAssets(target as MinimalGestureGenerator);
+                    }
+                    finally {
+                        AssetDatabase.StopAssetEditing();
+                        AssetDatabase.SaveAssets();
+                        AssetDatabase.Refresh();
+                    }
+                    serializedObject.Update();
+                }
+            }
 
             blendTreeMoreInfoExpanded =
                 EditorGUILayout.Foldout(blendTreeMoreInfoExpanded, "Warning about Direct Blend Trees", true);
